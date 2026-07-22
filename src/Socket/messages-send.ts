@@ -53,6 +53,7 @@ import {
 	type FullJid,
 	getBinaryNodeChild,
 	getBinaryNodeChildren,
+	getBizBinaryNode,
 	isHostedLidUser,
 	isHostedPnUser,
 	isJidBot,
@@ -65,7 +66,8 @@ import {
 	jidNormalizedUser,
 	type JidWithDevice,
 	PSA_WID,
-	S_WHATSAPP_NET
+	S_WHATSAPP_NET,
+	shouldIncludeBizBinaryNode
 } from '../WABinary'
 import { USyncQuery, USyncUser } from '../WAUSync'
 import { makeNewsletterSocket } from './newsletter'
@@ -1090,6 +1092,13 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 			if (additionalNodes && additionalNodes.length > 0) {
 				;(stanza.content as BinaryNode[]).push(...additionalNodes)
+			}
+
+			// button/list/template messages need a <biz> node in the stanza,
+			// otherwise recipients' clients never render them
+			const bizContent = normalizeMessageContent(message)
+			if (bizContent && shouldIncludeBizBinaryNode(bizContent) && !additionalNodes?.some(node => node.tag === 'biz')) {
+				;(stanza.content as BinaryNode[]).push(getBizBinaryNode(bizContent))
 			}
 
 			logger.debug({ msgId }, `sending message to ${participants.length} devices`)
