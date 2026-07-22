@@ -29,7 +29,7 @@ import type {
 	WATextMessage
 } from '../Types'
 import { WAMessageStatus, WAProto } from '../Types'
-import { isJidGroup, isJidNewsletter, isJidStatusBroadcast, jidNormalizedUser } from '../WABinary'
+import { isJidGroup, isJidNewsletter, isJidStatusBroadcast, isLidUser, isPnUser, jidNormalizedUser } from '../WABinary'
 import { buildNativeFlowButton } from './button-builder'
 import { sha256 } from './crypto'
 import { generateMessageIDV2, getKeyAuthor, unixTimestampSeconds } from './generics'
@@ -621,49 +621,62 @@ export const generateWAMessageContent = async (
 		m = await prepareWAMessageMedia(message, options)
 	}
 
-	// ===== interactive buttons / native flow =====
+	// ===== buttons (classic ButtonsMessage, rendered thanks to the <biz> stanza node) =====
 	const btnContent = message as unknown as ButtonsMessageContent & ListMessageContent
 	if (Array.isArray(btnContent.buttons) && btnContent.buttons.length) {
-		let header: proto.Message.InteractiveMessage.IHeader = {
-			title: btnContent.title || '',
-			subtitle: '',
-			hasMediaAttachment: false
+		const buttonsMessage: proto.Message.IButtonsMessage = {
+			buttons: btnContent.buttons.map(b => {
+				if (b.url || b.copy || b.call || b.sections) {
+					const flow = buildNativeFlowButton(b)
+					return {
+						buttonId: b.id || b.text,
+						nativeFlowInfo: {
+							name: flow.name,
+							paramsJson: flow.buttonParamsJson
+						},
+						type: proto.Message.ButtonsMessage.Button.Type.NATIVE_FLOW
+					}
+				}
+
+				return {
+					buttonId: b.id || b.text,
+					buttonText: { displayText: b.text },
+					type: proto.Message.ButtonsMessage.Button.Type.RESPONSE
+				}
+			})
 		}
 
-		if (m.imageMessage) {
-			header = { ...header, hasMediaAttachment: true, imageMessage: m.imageMessage }
-		} else if (m.videoMessage) {
-			header = { ...header, hasMediaAttachment: true, videoMessage: m.videoMessage }
-		} else if (m.documentMessage) {
-			header = { ...header, hasMediaAttachment: true, documentMessage: m.documentMessage }
-		}
+		if (btnContent.text) {
+			buttonsMessage.contentText = btnContent.text
+			buttonsMessage.headerType = proto.Message.ButtonsMessage.HeaderType.EMPTY
+		} else {
+			buttonsMessage.contentText =
+				btnContent.caption || m.imageMessage?.caption || m.videoMessage?.caption || m.documentMessage?.caption || ''
 
-		const bodyText =
-			btnContent.text ||
-			btnContent.caption ||
-			m.imageMessage?.caption ||
-			m.videoMessage?.caption ||
-			m.documentMessage?.caption ||
-			m.extendedTextMessage?.text ||
-			''
-
-		const interactiveMessage: proto.Message.IInteractiveMessage = {
-			body: { text: bodyText },
-			footer: { text: btnContent.footer || '' },
-			header,
-			nativeFlowMessage: {
-				buttons: btnContent.buttons.map(buildNativeFlowButton),
-				messageParamsJson: ''
+			if (m.imageMessage) {
+				buttonsMessage.headerType = proto.Message.ButtonsMessage.HeaderType.IMAGE
+				buttonsMessage.imageMessage = m.imageMessage
+			} else if (m.videoMessage) {
+				buttonsMessage.headerType = proto.Message.ButtonsMessage.HeaderType.VIDEO
+				buttonsMessage.videoMessage = m.videoMessage
+			} else if (m.documentMessage) {
+				buttonsMessage.headerType = proto.Message.ButtonsMessage.HeaderType.DOCUMENT
+				buttonsMessage.documentMessage = m.documentMessage
+			} else {
+				buttonsMessage.headerType = proto.Message.ButtonsMessage.HeaderType.EMPTY
 			}
 		}
 
-		delete m.imageMessage
-		delete m.videoMessage
-		delete m.documentMessage
-		delete m.extendedTextMessage
-		delete m.conversation
+		if (btnContent.title && !m.imageMessage && !m.videoMessage && !m.documentMessage) {
+			buttonsMessage.headerType = proto.Message.ButtonsMessage.HeaderType.TEXT
+			buttonsMessage.text = btnContent.title
+		}
 
-		m.interactiveMessage = interactiveMessage
+		if (btnContent.footer) {
+			buttonsMessage.footerText = btnContent.footer
+		}
+
+		m = { buttonsMessage }
 	} else if (Array.isArray(btnContent.sections) && btnContent.sections.length) {
 		// ===== list message (private chats @s.whatsapp.net) =====
 		m.listMessage = {
@@ -818,6 +831,17 @@ export const generateWAMessageFromContent = (
 			expiration: options.ephemeralExpiration || WA_DEFAULT_EPHEMERAL
 			//ephemeralSettingTimestamp: options.ephemeralOptions.eph_setting_ts?.toString()
 		}
+	}
+
+	// WA Web attaches the recipient's device-list metadata on 1:1 chats;
+	// button/list messages don't render on many clients without it
+	const messageContextInfo = message.messageContextInfo
+	if (messageContextInfo?.messageSecret && (isPnUser(jid) || isLidUser(jid))) {
+		messageContextInfo.deviceListMetadata = {
+			recipientKeyHash: randomBytes(10),
+			recipientTimestamp: unixTimestampSeconds()
+		}
+		messageContextInfo.deviceListMetadataVersion = 2
 	}
 
 	message = WAProto.Message.create(message)

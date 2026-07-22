@@ -76,25 +76,7 @@ export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	markOnlineOnConnect: true,
 	// skipping the full history sync makes connecting much faster and lighter
 	syncFullHistory: false,
-	patchMessageBeforeSending: msg => {
-		// interactive/list/button/template messages only render on the recipient's
-		// device when wrapped in a viewOnceMessage with device-list metadata
-		if (msg.interactiveMessage || msg.listMessage || msg.buttonsMessage || msg.templateMessage) {
-			msg = {
-				viewOnceMessage: {
-					message: {
-						messageContextInfo: {
-							deviceListMetadata: {},
-							deviceListMetadataVersion: 2
-						},
-						...msg
-					}
-				}
-			}
-		}
-
-		return msg
-	},
+	patchMessageBeforeSending: msg => msg,
 	shouldSyncHistoryMessage: ({ syncType }: proto.Message.IHistorySyncNotification) => {
 		return syncType !== proto.HistorySync.HistorySyncType.FULL
 	},
